@@ -1,12 +1,12 @@
-
-
 # RShiny for Volcano Plot Generator with Benchmarking (DuckDB vs dplyr)
 
-This repository contains an R Shiny app for generating **volcano plots** from gene expression data, along with a performance comparison between **DuckDB** and **dplyr** for data processing. The app allows you to upload a CSV file, choose groups for comparison, and run statistical tests. It logs the runtime of each analysis and compares performance between DuckDB and dplyr.
+This repository contains an R Shiny app for generating **volcano plots** from gene expression data, along with a performance comparison between **DuckDB** and **dplyr** for data processing. 
+
+The csv is in long format from a wide table using melt function. The original dataset can be accessed in the supplemental section, Shen et al. Int. J. Mol. Sci. 2023, 24(4), 4033, https://doi.org/10.3390/ijms24044033. 
 
 ## Motivation
 
-I didn't initially pay much attention to Shiny app performance, as the focus was primarily on functionality and user interface. However, after recently reading a post titled ["R Shiny and DuckDB: How to Speed Up Your Shiny Apps When Working With Large Datasets"](https://www.r-bloggers.com/2024/05/r-shiny-and-duckdb-how-to-speed-up-your-shiny-apps-when-working-with-large-datasets/), written by Dario Radečić, I became intrigued to try DuckDB's potential to improve data processing performance.Inspired by the post, I decided to benchmark its performance within a small Shiny app to see how it compares to dplyr for processing large datasets.
+I didn't initially pay much attention to Shiny app performance, as the focus was primarily on functionality and user interface. However, inspired by the post, ["R Shiny and DuckDB: How to Speed Up Your Shiny Apps When Working With Large Datasets"](https://www.r-bloggers.com/2024/05/r-shiny-and-duckdb-how-to-speed-up-your-shiny-apps-when-working-with-large-datasets/), written by Dario Radečić, I decided to benchmark its performance within this small Shiny app to see how it compares to dplyr for processing large datasets.
 
 ## Features
 
@@ -33,4 +33,6 @@ After running the analysis multiple times, the average runtime for each approach
 
 - dplyr: 0.89 seconds
 
-DuckDB outperforms dplyr slightly in terms of runtime, 0.06 second faster or 7% improvement 
+DuckDB outperforms dplyr slightly in terms of runtime, 0.06 second faster or 7% improvement. 
+
+** This project is an ongoing effort
