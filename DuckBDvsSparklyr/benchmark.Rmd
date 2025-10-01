@@ -1,0 +1,243 @@
+---
+title: "BaseRvsDuckBDvsSparklyr"
+author: "VN"
+date: "2025-09-29"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set up library}
+library(duckdb)
+library(DBI)
+library(dplyr)
+library(arrow)
+library(ggplot2)
+library(sparklyr)
+library(glue)
+library(stringr)
+```
+I adapted the provided code from Zach Wilson's news letter to recreate gen_dataset funtion, and run it in conda. I was worried a bit on my 8GB RAM couldn't handle the generation of 5e8 row file, it stopped after 4 mins. However the file was corrupted. So I resolved with Collab. 
+
+Let's take a look at the file. 
+```{r}
+library(sparklyr)
+# Connect to the Spark cluster
+spark_conn <- spark_connect(master ="local")
+# Print the version of Spark
+spark_version(sc=spark_conn)
+```
+**Note:** An error occur:"Error in if (!dir.exists(hivePath)) { : argument is of length zero". Run 'spark_install()' in the console and it solved the problem.
+```{r}
+file_path <- "dummy_data/ds_50000000_rows.parquet"
+df_50mil <- spark_read_parquet(spark_conn, name = "data_500mil", path = file_path)
+```
+Now we can inspect the files
+```{r}
+# Examine structure of data
+glimpse(df_50mil)
+```
+```{r}
+#schema
+sdf_schema(df_50mil)
+```
+```{r}
+print(df_50mil, n = 5, width =Inf)
+```
+```{r}
+spark_disconnect(sc = spark_conn)
+```
+
+```{r}
+# link to the ~dummy_data folder
+data_dir <- "dummy_data/"
+parquet_files <- list.files(data_dir, pattern = "^ds_.*_rows\\.parquet$", full.names = TRUE)
+```
+
+
+```{r DuckDB benchmark}
+duckdb_benchmark <- function(files) {
+  con <- dbConnect(duckdb())
+  results <- list()
+
+  for (f in files) {
+    start <- Sys.time()
+    dbGetQuery(con, glue("
+      SELECT rand_dt, COUNT(DISTINCT rand_str) AS distinct_rand_str_count
+      FROM read_parquet('{f}')
+      GROUP BY rand_dt
+      ORDER BY distinct_rand_str_count DESC
+    "))
+    elapsed <- as.numeric(difftime(Sys.time(), start, units = "secs")) * 1000
+
+    n_rows <- dbGetQuery(con, glue("SELECT COUNT(*) AS n FROM read_parquet('{f}')"))$n
+    results[[length(results)+1]] <- data.frame(
+      Engine = "DuckDB",
+      File = basename(f),
+      Rows = n_rows,
+      RunTime_ms = elapsed
+    )
+  }
+
+  dbDisconnect(con, shutdown = TRUE)
+  bind_rows(results)
+}
+```
+
+```{r Spark benchmark}
+spark_benchmark <- function(files) {
+  spark_conn <- spark_connect(master = "local")
+  results <- list()
+
+  for (f in files) {
+    start <- Sys.time()
+    df <- spark_read_parquet(spark_conn, name = str_remove(basename(f), "\\.parquet$"), path = f)
+    df %>%
+      group_by(rand_dt) %>%
+      summarise(distinct_rand_str_count = n_distinct(rand_str)) %>%
+      arrange(desc(distinct_rand_str_count)) %>%
+      collect()
+    elapsed <- as.numeric(difftime(Sys.time(), start, units = "secs")) * 1000
+
+    n_rows <- df %>% count() %>% collect() %>% pull()
+    results[[length(results)+1]] <- data.frame(
+      Engine = "Spark",
+      File = basename(f),
+      Rows = n_rows,
+      RunTime_ms = elapsed
+    )
+  }
+
+  spark_disconnect(sc= spark_conn)
+  bind_rows(results)
+}
+```
+
+```{r BaseR Benchmark}
+baseR_benchmark <- function(files) {
+  results <- list()
+
+  for (f in files) {
+    df <- as.data.frame(read_parquet(f))
+    start <- Sys.time()
+    agg <- aggregate(rand_str ~ rand_dt, data = df, FUN = function(x) length(unique(x)))
+    agg <- agg[order(agg$rand_str, decreasing = TRUE), ]
+    elapsed <- as.numeric(difftime(Sys.time(), start, units = "secs")) * 1000
+
+    n_rows <- nrow(df)
+    results[[length(results)+1]] <- data.frame(
+      Engine = "Base R",
+      File = basename(f),
+      Rows = n_rows,
+      RunTime_ms = elapsed
+    )
+  }
+
+  bind_rows(results)
+}
+```
+
+```{r Benchmarks}
+duckdb_res <- duckdb_benchmark(parquet_files)
+spark_res  <- spark_benchmark(parquet_files)
+#base_res   <- baseR_benchmark(parquet_files[-c(1, 2, 10)])
+
+# Combine and display
+benchmark_results <- bind_rows(duckdb_res, spark_res)
+save(duckdb_res, spark_res, benchmark_results, file = "01Oct_progress.RData")
+print(benchmark_results)
+
+```
+"Error: Out of memory: realloc of size 3976232960 failed" while runing base R. remove 500_000_000 file and rerun. The issue persisted, my work-a-round is to save the duckdb_res, spark_res, and the results, and run baseR sequencially. 
+```{r}
+#inspect file list
+parquet_files
+```
+
+```{r}
+#base_res   <- baseR_benchmark(parquet_files[-c(1, 2, 3, 10)])
+base_res2   <- baseR_benchmark(parquet_files[2])
+base_res3   <- baseR_benchmark(parquet_files[10])
+```
+
+```{r reload the files and combine the results}
+load(file = "01Oct_progress.RData")
+```
+```{r}
+#adding baseR to the result
+benchmark_results02 <- bind_rows(benchmark_results, base_res, base_res2)
+save(duckdb_res, spark_res,base_res, benchmark_results,benchmark_results02, base_res2,  file = "01Oct_progress.RData")
+
+```
+
+
+```{r plotting comparison}
+library(ggplot2)
+library(scales)
+
+# Create a barplot, filling by the 'group' column
+scaled_plot <- ggplot(benchmark_results02, aes(x = as.factor(Rows), y = RunTime_ms, fill = Engine)) +
+  geom_bar(stat = "identity", position = position_dodge2(preserve = "single")) +
+  scale_y_log10(labels = comma) +
+  labs(
+    title = "BaseR vs DuckDB vs Spark Benchmark",
+    x = "Number of Rows",
+    y = "Run Time (ms, log scale)",
+    color = "Engine"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "top"
+  )
+  
+scaled_plot
+```
+
+```{r}
+# Create a barplot, filling by the 'group' column
+unscaled_plot <- ggplot(benchmark_results02, aes(x = as.factor(Rows), y = RunTime_ms, fill = Engine)) +
+  geom_bar(stat = "identity", position = position_dodge2(preserve = "single")) +
+  labs(
+    title = "BaseR vs DuckDB vs Spark Benchmark",
+    x = "Number of Rows",
+    y = "Run Time (miliseconds)",
+    color = "Engine"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "top"
+  )
+unscaled_plot
+```
+This might due to overhead set up cost in Spark and DuckBD in small datasets. So we can check amorization, run time per row. 
+```{r}
+# Create a barplot, filling by the 'group' column
+timeperrow_plot <- benchmark_results02 %>%
+  mutate(TimeperRow_ms =  RunTime_ms/Rows) %>%
+  ggplot(aes(x = as.factor(Rows), y = TimeperRow_ms, fill = Engine)) +
+  geom_bar(stat = "identity", position = position_dodge2(preserve = "single")) +
+  scale_y_log10(labels = comma) +
+  labs(
+    title = "Amortization of Overhead plot",
+    x = "Number of Rows",
+    y = "Time per row (miliseconds)",
+    color = "Engine"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "top"
+  )
+timeperrow_plot
+```
+
+```{r}
+ggsave("figures/scaled_plot.png", plot = scaled_plot, device = "png", height = 6, width = 8)
+ggsave("figures/unscaled_plot.png", plot = unscaled_plot, device = "png", height = 6, width = 8)
+ggsave("figures/timeperrow_plot.png", plot = timeperrow_plot, device = "png", height = 6, width = 8)
+```
+
+
